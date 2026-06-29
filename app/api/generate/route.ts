@@ -1,47 +1,30 @@
 // ============================================================
-// POST /api/generate — 图片生成代理
+// POST /api/generate — 图片生成代理（Vercel 兼容版）
+// 返回 base64 data URL，无需文件系统写入
 // ============================================================
 
 import { NextRequest, NextResponse } from 'next/server';
-import { canGenerate, incrementUsage, cleanOldUsage } from '@/lib/storage';
+import { canGenerate, incrementUsage } from '@/lib/storage';
 import { callGenerateAPI } from '@/lib/api';
 import type { GenerateRequest } from '@/lib/types';
 
-import fs from 'fs';
-import path from 'path';
-
-const OUTPUT_DIR = path.join(process.cwd(), 'public', 'outputs');
-
-function ensureOutputDir() {
-  if (!fs.existsSync(OUTPUT_DIR)) {
-    fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-  }
-}
-
 function getClientIP(request: NextRequest): string {
-  // Vercel 环境下通过 x-forwarded-for 获取真实 IP
   const forwarded = request.headers.get('x-forwarded-for');
   if (forwarded) return forwarded.split(',')[0].trim();
-  // 本地开发 fallback
   return request.headers.get('x-real-ip') || '127.0.0.1';
 }
 
-function saveBase64Image(base64: string, mimeType: string): string {
-  ensureOutputDir();
-  const ext = mimeType.split('/')[1] || 'png';
-  const filename = `${Date.now()}.${ext}`;
-  const filepath = path.join(OUTPUT_DIR, filename);
-  const buffer = Buffer.from(base64, 'base64');
-  fs.writeFileSync(filepath, buffer);
-  return `/outputs/${filename}`;
+/** 下载 URL 图片，转为 base64 */
+async function downloadUrlAsBase64(url: string): Promise<string> {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`下载图片失败: ${resp.status}`);
+  const buffer = await resp.arrayBuffer();
+  return Buffer.from(buffer).toString('base64');
 }
 
 export async function POST(request: NextRequest) {
   try {
     const ip = getClientIP(request);
-
-    // 清理旧数据
-    cleanOldUsage();
 
     // 检查用量限制
     if (!canGenerate(ip)) {
@@ -71,17 +54,19 @@ export async function POST(request: NextRequest) {
     // 调用 yunwu.ai 接口
     const result = await callGenerateAPI(body);
 
-    // 处理返回的图片
+    // 处理返回的图片 → 构造成 data URL
     let imageUrl: string;
 
     if ('url' in result && result.url) {
-      // URL 类型：下载后存本地
+      // URL 类型：下载后转为 data URL
       const base64 = await downloadUrlAsBase64(result.url);
-      const mimeType = result.url.match(/\.(png|jpe?g|webp)/)?.[1] || 'png';
-      imageUrl = saveBase64Image(base64, `image/${mimeType === 'jpg' ? 'jpeg' : mimeType}`);
+      const ext = result.url.match(/\.(png|jpe?g|webp)/i)?.[1] || 'png';
+      const mime = ext === 'jpg' ? 'jpeg' : ext;
+      imageUrl = `data:image/${mime};base64,${base64}`;
     } else if ('base64' in result && result.base64) {
-      // Base64 类型：直接存本地
-      imageUrl = saveBase64Image(result.base64, result.mimeType || 'image/png');
+      // Base64 类型：直接构造 data URL
+      const mime = result.mimeType || 'image/png';
+      imageUrl = `data:${mime};base64,${result.base64}`;
     } else {
       throw new Error('未获取到有效图片');
     }
@@ -101,12 +86,4 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
-}
-
-/** 下载 URL 图片，转为 base64 */
-async function downloadUrlAsBase64(url: string): Promise<string> {
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`下载图片失败: ${resp.status}`);
-  const buffer = await resp.arrayBuffer();
-  return Buffer.from(buffer).toString('base64');
 }
