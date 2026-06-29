@@ -1,0 +1,6 @@
+node_modules/
+.next/
+.env.local
+.data/
+public/outputs/*
+!public/outputs/.gitkeep
