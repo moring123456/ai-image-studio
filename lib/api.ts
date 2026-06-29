@@ -122,22 +122,31 @@ async function callOpenAIImage(params: CallOpenAIParams) {
 
   const json = await resp.json();
 
-  // 尝试标准 DALL·E 格式: data[0].url
+    // 尝试 GPT Image-2 / DALL·E b64_json 格式: data[0].b64_json
+  if (json?.data?.[0]?.b64_json) {
+    return { base64: json.data[0].b64_json, mimeType: 'image/png' };
+  }
+
+  // 尝试标准 DALL·E URL 格式: data[0].url
   if (json?.data?.[0]?.url) {
     return { url: json.data[0].url };
   }
 
-  // 尝试 GPT Image 格式: choices[0].message.content 中可能含 base64 或 URL
+  // 尝试 GPT Image Chat 风格: choices[0].message.content 中可能含 base64 或 URL
   if (json?.choices?.[0]?.message?.content) {
     const content = json.choices[0].message.content;
-    // 判断是 URL 还是 base64
     if (content.startsWith('http')) {
       return { url: content };
     }
-    return { base64: content.replace(/^data:image\/\w+;base64,/, ''), mimeType: 'image/png' };
+    // 尝试去掉 data:image 前缀
+    const cleaned = content.replace(/^data:image\/\w+;base64,/, '');
+    return { base64: cleaned, mimeType: 'image/png' };
   }
 
-  throw new Error('OpenAI 响应中未找到图片');
+  // 所有格式都未匹配，打印完整响应帮助调试
+  const preview = JSON.stringify(json).slice(0, 500);
+  console.error('[api] 未识别的 OpenAI 响应:', preview);
+  throw new Error(`OpenAI 响应中未找到图片，响应预览: ${preview}`);
 }
 
 /** 下载 URL 图片，转为 base64 */
