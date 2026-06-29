@@ -7,7 +7,8 @@ import ImagePreview from '@/components/ImagePreview';
 import HistoryPanel from '@/components/HistoryPanel';
 
 const HISTORY_KEY = 'ai-image-studio-history';
-const MAX_HISTORY = 20;
+const MAX_HISTORY = 5; // base64 data URL 体积大，最多保留 5 张
+const MAX_TOTAL_SIZE = 2 * 1024 * 1024; // localStorage 总大小限制约 2MB
 
 function loadHistory(): HistoryItem[] {
   if (typeof window === 'undefined') return [];
@@ -21,7 +22,26 @@ function loadHistory(): HistoryItem[] {
 
 function saveHistory(items: HistoryItem[]) {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, MAX_HISTORY)));
+  // 从最新开始保留，直到总和不超过 MAX_TOTAL_SIZE
+  const trimmed: HistoryItem[] = [];
+  let totalSize = 0;
+  for (const item of items) {
+    const size = item.imageUrl.length * 2; // UTF-16 近似
+    if (trimmed.length >= MAX_HISTORY || totalSize + size > MAX_TOTAL_SIZE) break;
+    trimmed.push(item);
+    totalSize += size;
+  }
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(trimmed));
+  } catch {
+    // quota 超额时，只保留最后一张
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify([items[0]]));
+    } catch {
+      // 还是存不下，清空
+      localStorage.removeItem(HISTORY_KEY);
+    }
+  }
 }
 
 export default function HomePage() {
